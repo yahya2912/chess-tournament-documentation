@@ -1,0 +1,498 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage{thga-db}
+
+\renewcommand{\thgaKurs}{Databases}
+\renewcommand{\thgaDatum}{Summer Term 2026}
+
+\begin{document}
+
+\thispagestyle{empty}
+\thgaTitel{Term Project -- Documentation}%
+{Chess Club Tournament \& Rating Manager}
+
+\begin{infobox}
+\textbf{Author:} Yahya El Idrissi \\
+\textbf{Module:} Introduction to Database Management Systems -- THGA Bochum \\
+\textbf{Stack:} PostgreSQL 16 -- FastAPI -- Docker Compose -- tkinter (\texttt{.deb}) \\
+\textbf{Application repository:} \url{https://github.com/yahya2912/chess-club-manager} \\
+\textbf{Documentation repository:} \url{https://github.com/yahya2912/chess-tournament-documentation} \\
+\textbf{Demo video:} \url{https://youtu.be/xtMlvPf5F0g}
+\end{infobox}
+
+\tableofcontents
+
+\vspace{1em}
+
+% ============================================================
+\section{Introduction and motivation}
+% ============================================================
+
+Chess clubs often organize small tournaments with spreadsheets, handwritten
+pairing sheets, or several independent tools. This makes it difficult to keep
+player data, tournament registrations, game results, Elo changes, and final
+standings consistent.
+
+The \textbf{Chess Club Tournament \& Rating Manager} replaces this fragmented
+workflow with a relational database-backed desktop application. It manages
+\textbf{players}, \textbf{tournaments}, \textbf{registrations},
+\textbf{rounds}, \textbf{games}, \textbf{openings}, and
+\textbf{rating history}. Data is exposed through a FastAPI REST API and used by
+a tkinter desktop frontend.
+
+\begin{beispielbox}
+\textbf{Usage scenario.}
+A club administrator creates a tournament, registers the participating players,
+records the result of a game, and immediately sees the updated Elo ratings and
+tournament standings. The rating changes are also written to the rating-history
+table so that previous values remain traceable.
+\end{beispielbox}
+
+The delivered core workflow is:
+
+\begin{verbatim}
+Create players
+-> Create tournament and rounds
+-> Register players
+-> Record games
+-> Update Elo and rating history
+-> View standings
+\end{verbatim}
+
+Automatic pairing generation is intentionally outside the project scope.
+
+% ============================================================
+\section{Data model}
+% ============================================================
+
+The domain contains seven entity types:
+
+\begin{itemize}[leftmargin=1.4em, topsep=2pt]
+  \item \textbf{player}
+  \item \textbf{opening}
+  \item \textbf{tournament}
+  \item \textbf{registration}
+  \item \textbf{round}
+  \item \textbf{game}
+  \item \textbf{rating\_history}
+\end{itemize}
+
+A player can participate in many tournaments, and a tournament can contain many
+players. This \texttt{N:M} relationship is resolved by
+\textbf{registration}. A tournament contains several rounds, and each game
+belongs to one round. Every game references a White player and a Black player
+and may also reference an opening through its ECO code. Rating changes are
+stored separately in \textbf{rating\_history} so that previous values are not
+overwritten.
+
+\begin{beispielbox}
+\textbf{ER model (textual).}
+
+\begin{itemize}[leftmargin=1.4em, topsep=2pt]
+  \item \textbf{player} (1) -- registers -- (N) \textbf{registration}
+  \item \textbf{tournament} (1) -- contains -- (N) \textbf{registration}
+  \item \textbf{tournament} (1) -- contains -- (N) \textbf{round}
+  \item \textbf{round} (1) -- contains -- (N) \textbf{game}
+  \item \textbf{player} (1) -- plays as White/Black -- (N) \textbf{game}
+  \item \textbf{player} (1) -- has -- (N) \textbf{rating\_history}
+  \item \textbf{opening} (1) -- classifies -- (N) \textbf{game}
+\end{itemize}
+
+Thus \textbf{player} \texttt{N:M} \textbf{tournament}, resolved through
+\textbf{registration}.
+\end{beispielbox}
+
+\subsection{Relational schema}
+
+The implemented schema in \texttt{db/01\_schema.sql} uses the following
+relations:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item \texttt{player}(\underline{id}, name, birth\_year, elo)
+  \item \texttt{opening}(\underline{eco\_code}, name)
+  \item \texttt{tournament}(\underline{id}, name, start\_date, status, rounds)
+  \item \texttt{registration}(\underline{player\_id, tournament\_id}, seed)
+  \item \texttt{round}(\underline{id}, tournament\_id, round\_number)
+  \item \texttt{game}(\underline{id}, round\_id, white\_id, black\_id,
+        opening\_eco, result)
+  \item \texttt{rating\_history}(\underline{id}, player\_id, game\_id,
+        old\_elo, new\_elo, changed\_at)
+\end{itemize}
+
+Important integrity rules include primary and foreign keys, a composite key for
+registrations, unique round numbers within a tournament, controlled tournament
+status values, valid game results, and a check that White and Black are not the
+same player.
+
+\textbf{Normalisation.}
+Player data is stored only in \texttt{player}, opening descriptions only in
+\texttt{opening}, tournament data only in \texttt{tournament}, and game,
+registration, round, and rating-history data reference those entities through
+keys instead of duplicating their attributes. The design therefore avoids
+unnecessary redundancy and keeps the main relations in third normal form.
+
+% ============================================================
+\section{Database (PostgreSQL)}
+% ============================================================
+
+The schema and deterministic seed data are stored in:
+
+\begin{verbatim}
+db/01_schema.sql
+db/02_seed.sql
+\end{verbatim}
+
+PostgreSQL is started through Docker Compose. The schema is initialized when
+the database is created, and the seed data provides deterministic reference and
+sample rows that are also used by CI checks.
+
+The database is not treated as a passive store. Integrity rules are enforced
+directly at DDL level so invalid states are rejected even when they do not
+originate from the graphical frontend.
+
+Examples include:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item one registration per player and tournament,
+  \item unique round numbers inside a tournament,
+  \item restricted game-result values,
+  \item White and Black must be different players,
+  \item foreign keys between tournaments, rounds, games, players, openings,
+        registrations, and rating history.
+\end{itemize}
+
+Multi-row operations are executed transactionally in the backend. This is
+especially important when recording a game because one user action inserts the
+game, updates two current Elo values, and inserts two rating-history entries.
+
+% ============================================================
+\section{REST API (FastAPI)}
+% ============================================================
+
+The FastAPI backend is the only application component that communicates with
+PostgreSQL. The tkinter frontend never executes SQL directly.
+
+The API entry point is:
+
+\begin{verbatim}
+api/app/main.py
+\end{verbatim}
+
+Application logic is separated into routers for players, tournaments,
+registrations, games, rating history, and standings.
+
+The public \texttt{/health} endpoint is used to verify that the backend is
+reachable. Application routes are protected with the
+\texttt{X-API-Key} header.
+
+\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\linewidth}{@{}p{1.6cm}p{4.7cm}X@{}}
+\toprule
+\textbf{Method} & \textbf{Path / area} & \textbf{Purpose} \\
+\midrule
+\texttt{GET} & \texttt{/players} & list players and current Elo values \\
+\texttt{POST} & \texttt{/players} & create a player and initial rating history \\
+\texttt{POST} & \texttt{/tournaments} & create tournament and round records \\
+\texttt{POST} & \texttt{/registrations} & register a player for a tournament \\
+\texttt{POST} & \texttt{/games} & validate and store a game, then update Elo \\
+\texttt{GET} & \texttt{/rating-history} & return Elo history, optionally filtered \\
+\texttt{GET} & \texttt{/standings} & calculate tournament standings and Buchholz \\
+\bottomrule
+\end{tabularx}
+
+\subsection{Elo calculation}
+
+Elo calculation is isolated in:
+
+\begin{verbatim}
+api/app/elo.py
+\end{verbatim}
+
+The delivered implementation uses a K-factor of 20. After a valid game, both
+players receive new ratings and two history rows are inserted.
+
+\subsection{Standings and Buchholz}
+
+Standings are calculated in SQL using common table expressions. Scoring is:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item win = 1.0 point,
+  \item draw = 0.5 points,
+  \item loss = 0.0 points.
+\end{itemize}
+
+Full Buchholz is calculated as the sum of all opponents' tournament points.
+The final ordering uses points first, followed by Buchholz and wins.
+
+\begin{lstlisting}[language=SQL, caption={Simplified scoring logic used for standings}]
+CASE g.result
+    WHEN '1-0' THEN 1.0
+    WHEN '0-1' THEN 0.0
+    ELSE 0.5
+END AS points
+\end{lstlisting}
+
+\subsection{Extending the backend}
+
+To add a new function, the same separation should be preserved:
+
+\begin{enumerate}[leftmargin=1.6em, topsep=2pt]
+  \item decide whether the database schema must change,
+  \item add or extend a FastAPI route,
+  \item reuse the API-key dependency,
+  \item use a transaction for multi-row writes,
+  \item extend the frontend API client,
+  \item add the graphical control or view,
+  \item add tests for valid and invalid cases.
+\end{enumerate}
+
+% ============================================================
+\section{Frontend (tkinter, packaged as .deb)}
+% ============================================================
+
+The frontend is a Python tkinter desktop application. It communicates only with
+the REST API and does not connect directly to PostgreSQL.
+
+At startup, a connection dialog asks for the API URL and the
+\texttt{X-API-Key}. The connection is validated before the main window opens.
+
+The main application contains six tabs:
+
+\begin{itemize}[leftmargin=1.4em]
+  \item \textbf{Players}
+  \item \textbf{Standings}
+  \item \textbf{Rating History}
+  \item \textbf{Record Game}
+  \item \textbf{Register Player}
+  \item \textbf{Create Tournament}
+\end{itemize}
+
+\subsection{User workflow}
+
+\textbf{Players.}
+Existing players can be viewed and new players can be created with a name,
+optional birth year, and initial Elo value. Creating a player also creates the
+first rating-history entry.
+
+\textbf{Create Tournament.}
+The user enters a tournament name, start date, and number of rounds. The backend
+creates the tournament and its rounds in one operation.
+
+\textbf{Register Player.}
+A player is assigned to a tournament with an optional seed. Duplicate
+registration is rejected.
+
+\textbf{Record Game.}
+The user selects the round, White player, Black player, ECO code, and result.
+Valid results are \texttt{1-0}, \texttt{0-1}, and
+\texttt{1/2-1/2}. A successful request stores the game and updates both
+ratings.
+
+\textbf{Standings.}
+The standings view displays points, Buchholz, wins, draws, losses, and games
+played.
+
+\textbf{Rating History.}
+The rating-history view shows all recorded Elo changes or filters them by
+player.
+
+\subsection{Packaging}
+
+For Debian-based systems the frontend is packaged as a \texttt{.deb}. The
+package can be built with:
+
+\begin{verbatim}
+sh frontend/debian/build-deb.sh
+\end{verbatim}
+
+The generated package is:
+
+\begin{verbatim}
+frontend/debian/chess-club-manager_1.0.0_all.deb
+\end{verbatim}
+
+The package contains the desktop frontend only. PostgreSQL and FastAPI remain
+containerized and are started separately through Docker Compose.
+
+% ============================================================
+\section{Operation and deployment}
+% ============================================================
+
+The backend runs as two containers, PostgreSQL and FastAPI, orchestrated by
+Docker Compose. Credentials and the API key are stored in a local
+\texttt{.env} file that is not committed.
+
+\subsection{Local startup}
+
+Create the local configuration:
+
+\begin{verbatim}
+cp .env.example .env
+\end{verbatim}
+
+Start the backend:
+
+\begin{verbatim}
+docker compose up -d --build
+\end{verbatim}
+
+Check the health endpoint:
+
+\begin{verbatim}
+http://127.0.0.1:8000/health
+\end{verbatim}
+
+A working backend returns:
+
+\begin{verbatim}
+{"status":"ok"}
+\end{verbatim}
+
+Start the source frontend on Linux or macOS:
+
+\begin{verbatim}
+PYTHONPATH="$PWD/frontend" python3 -m chess_club_fe.main
+\end{verbatim}
+
+At startup, enter the API URL and the \texttt{API\_KEY} value from
+\texttt{.env}.
+
+\subsection{Deployment steps}
+
+On the target system:
+
+\begin{enumerate}[leftmargin=1.6em, topsep=2pt]
+  \item copy the project and create the \texttt{.env} file,
+  \item run \texttt{docker compose up -d --build},
+  \item install the generated Debian package with \texttt{dpkg},
+  \item launch \texttt{chess-club-manager},
+  \item enter the API URL and matching \texttt{X-API-Key}.
+\end{enumerate}
+
+\subsection{Testing and evaluation}
+
+For local API tests:
+
+\begin{verbatim}
+python3 -m venv api/.venv
+api/.venv/bin/pip install -r api/requirements.txt
+api/.venv/bin/pip install -r api/requirements-dev.txt
+cd api
+.venv/bin/pytest tests -v
+\end{verbatim}
+
+GitHub Actions verifies the PostgreSQL schema and deterministic seed data,
+database acceptance checks, FastAPI endpoint and business-logic tests, Docker
+Compose startup, Debian package creation, and LaTeX documentation builds.
+
+The main functions were verified as follows:
+
+\begin{center}
+\begin{tabular}{>{\raggedright\arraybackslash}p{3.0cm}
+                >{\raggedright\arraybackslash}p{4.7cm}
+                >{\raggedright\arraybackslash}p{5.0cm}}
+\toprule
+\textbf{Function} & \textbf{Test} & \textbf{Expected result} \\
+\midrule
+Create player &
+Create a player with an initial Elo value &
+Player and initial rating-history row are stored. \\
+
+Create tournament &
+Create a tournament with multiple rounds &
+Tournament and requested round records are created. \\
+
+Register player &
+Register the same player twice &
+First registration succeeds; duplicate registration is rejected. \\
+
+Record game &
+Record a valid result between registered players &
+Game is stored, both Elo values change, and history rows are created. \\
+
+Invalid game &
+Use an invalid result or identical White/Black player &
+Request is rejected and no partial update remains. \\
+
+Standings &
+Open standings after recorded games &
+Points, Buchholz, wins, draws, losses, and games played are shown. \\
+
+Authentication &
+Call a protected route with a wrong API key &
+Request is rejected. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Documentation build and release}
+
+This documentation repository uses the professor's LaTeX workflow structure.
+The local build command is:
+
+\begin{verbatim}
+make
+\end{verbatim}
+
+The resulting file is:
+
+\begin{verbatim}
+out/documentation.pdf
+\end{verbatim}
+
+A version tag matching \texttt{v*} triggers the GitHub Actions release
+workflow. For example:
+
+\begin{verbatim}
+git tag v1.0.0
+git push origin v1.0.0
+\end{verbatim}
+
+The generated documentation PDF is then attached to the GitHub Release.
+
+% ============================================================
+\section{Reflection}
+% ============================================================
+
+The separation into database, API, and frontend made the project easier to
+develop and test. Database constraints can be checked independently, API logic
+can be tested before the GUI is involved, and the tkinter frontend does not
+contain SQL.
+
+The most consistency-sensitive operation is game recording. One action affects
+the game table, two current Elo values, and two rating-history entries. Using a
+transaction prevents partial updates if validation or a database operation
+fails.
+
+The deployment model also influenced the design. PostgreSQL and FastAPI are
+reproducible through Docker Compose, while the tkinter frontend remains outside
+Docker and can be installed as the required Debian package.
+
+The delivered version intentionally does not include automatic Swiss pairing,
+edit/delete operations through the GUI, automatic tournament closing, user
+accounts, or detailed opening analytics. These are reasonable future
+extensions but were kept outside the defined scope.
+
+% ============================================================
+\section*{Sources and reuse}
+% ============================================================
+
+\addcontentsline{toc}{section}{Sources and reuse}
+
+Course patterns were reused and adapted where appropriate:
+
+\begin{itemize}[leftmargin=1.4em, topsep=2pt]
+  \item PostgreSQL/FastAPI separation and Docker Compose backend structure --
+        adapted from the DBMS lecture and exercises.
+  \item \texttt{X-API-Key} protection -- adapted from the course API example.
+  \item tkinter desktop-client approach and Debian packaging workflow --
+        adapted from the course material.
+  \item Documentation structure, THGA style, Makefile, and GitHub Actions
+        release workflow -- adapted from the professor's DBMS\_10 template.
+\end{itemize}
+
+The chess-specific schema design, Elo calculation, tournament workflow,
+standings and Buchholz logic, tests, and application-specific documentation
+were developed for the Chess Club Tournament \& Rating Manager.
+
+\end{document}
