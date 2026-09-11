@@ -1,19 +1,8 @@
-# ============================================================
-#  Build & publish the LaTeX documents of DBMS_10.
-#
-#  This is the reference workflow for your term-project
-#  documentation. Copy it (together with the Makefile) into
-#  your own documentation repository. On every pushed tag that
-#  matches  v*  it builds the PDFs and attaches them to a
-#  GitHub Release.
-# ============================================================
 name: Build & Publish
 
 on:
   push:
-    # Tag pushes (v*) build AND create a release; branch pushes only build,
-    # so you notice breakage early (see the release step's `if:`).
-    branches: [ master, main ]
+    branches: [ main ]
     tags: [ 'v*' ]
 
 jobs:
@@ -34,14 +23,14 @@ jobs:
             texlive-lang-german \
             texlive-fonts-recommended
 
-      - name: Build all PDFs
-        run: make all
+      - name: Build documentation
+        run: make
 
-      - name: Upload PDFs as build artifact
+      - name: Upload PDF as build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pdfs
-          path: out/*.pdf
+          name: documentation
+          path: out/documentation.pdf
 
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -49,6 +38,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ github.ref_name }}" \
-            --title "DBMS_10 ${{ github.ref_name }}" \
-            --notes "Automatically built documents for tag \`${{ github.ref_name }}\`: exercise, proposal template and example documentation." \
-            out/*.pdf
+            --title "Chess Tournament Documentation ${{ github.ref_name }}" \
+            --notes "Final documentation for the Chess Club Tournament & Rating Manager." \
+            out/documentation.pdf
